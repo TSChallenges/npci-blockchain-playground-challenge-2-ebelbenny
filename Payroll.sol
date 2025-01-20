@@ -14,7 +14,10 @@ contract Payroll {
 
     event Paid(uint256 id, address from, uint256 totalSalary, uint256 timestamp);
     event EmployeeAdded(uint256 id, address worker, uint256 salary);
+    event EmployeeDeactivated(uint256 id, address worker, uint256 timestamp);
     event PaymentScheduled(uint256 nextPaymentTime);
+    event CompanyFunded(address from, uint256 amount, uint256 newBalance);
+    event PaymentIntervalUpdated(uint256 newInterval);
 
     struct Employee {
         uint256 id;
@@ -41,25 +44,73 @@ contract Payroll {
         lastPaymentTime = block.timestamp; // Set the initial payment time to now
     }
 
-    // TODO: Add functionality to add a new employee with a salary and check if the employee already exists
+    function addEmployee(address _worker, uint256 _salary) external onlyCompanyOwner {
+        require(!isEmployee[_worker], "Employee already exists");
+        uint256 id = employees.length;
+        employees.push(Employee(id, _worker, _salary, block.timestamp, true));
+        isEmployee[_worker] = true;
+        totalEmployees++;
+        totalSalary += _salary;
+        emit EmployeeAdded(id, _worker, _salary);
+    }
 
-    // TODO: Add functionality to deactivate an employee (e.g., termination or leave)
+    function deactivateEmployee(address _worker) external onlyCompanyOwner {
+        uint256 index = getEmployeeIndex(_worker);
+        require(employees[index].isActive, "Employee is already inactive");
+        employees[index].isActive = false;
+        totalSalary -= employees[index].salary;
+        emit EmployeeDeactivated(employees[index].id, _worker, block.timestamp);
+    }
 
-    // TODO: Add functionality to check if the payment interval has elapsed since the last payment
+    function fundCompanyBalance() external payable {
+        require(msg.sender != companyAcc, "Company owner cannot fund directly");
+        companyBal += msg.value;
+        emit CompanyFunded(msg.sender, msg.value, companyBal);
+    }
 
-    // TODO: Add functionality to process batch payments securely and prevent reentrancy attacks
+    function updatePaymentInterval(uint256 _newInterval) external onlyCompanyOwner {
+        require(_newInterval > 0, "Payment interval must be greater than 0");
+        paymentInterval = _newInterval;
+        emit PaymentIntervalUpdated(_newInterval);
+    }
 
-    // TODO: Add functionality to allow the company owner to fund the company balance and track it
+    function payEmployees() external onlyCompanyOwner {
+        require(block.timestamp >= lastPaymentTime + paymentInterval, "Payment interval has not elapsed");
+        require(companyBal >= totalSalary, "Insufficient company balance");
+        
+        for (uint256 i = 0; i < employees.length; i++) {
+            if (employees[i].isActive) {
+                _sendPayment(employees[i].worker, employees[i].salary);
+                lastPaid[employees[i].worker] = block.timestamp;
+            }
+        }
 
-    // TODO: Add functionality to allow the company owner to update the payment interval dynamically
+        lastPaymentTime = block.timestamp;
+        emit Paid(block.timestamp, msg.sender, totalSalary, block.timestamp);
+        emit PaymentScheduled(lastPaymentTime + paymentInterval);
+    }
 
     function getEmployees() external view returns (Employee[] memory) {
         return employees;
     }
 
-    // TODO: Add an internal function to securely send money to an employee, preventing reentrancy attacks
+    function terminateContract() external onlyCompanyOwner {
+        selfdestruct(payable(companyAcc));
+    }
 
-    // TODO: Add a helper function to get an employee's index by their address
+    function getEmployeeIndex(address _worker) internal view returns (uint256) {
+        for (uint256 i = 0; i < employees.length; i++) {
+            if (employees[i].worker == _worker) {
+                return i;
+            }
+        }
+        revert("Employee not found");
+    }
 
-    // TODO: Optionally, add a function to terminate the contract and transfer remaining funds to the company owner
+    function _sendPayment(address _to, uint256 _amount) internal {
+        require(address(this).balance >= _amount, "Insufficient contract balance");
+        (bool success, ) = _to.call{value: _amount}("");
+        require(success, "Payment failed");
+        companyBal -= _amount;
+    }
 }
